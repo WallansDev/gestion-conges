@@ -13,11 +13,19 @@ Aucune dépendance externe : uniquement la bibliothèque standard Python.
 Lancement :  python gestion_conges.py
 """
 
+import calendar
 import json
 import os
 import tkinter as tk
 from datetime import date, timedelta
 from tkinter import messagebox, ttk
+
+MOIS_FR = [
+    "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+    "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
+]
+JOURS_FR = ["Lu", "Ma", "Me", "Je", "Ve", "Sa", "Di"]
+FORMAT_FR = "%d-%m-%Y"
 
 FICHIER_DONNEES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conges_data.json")
 
@@ -92,6 +100,118 @@ def jours_ouvres_periode(debut: date, fin: date, exclure_weekends: bool = True):
             decomptes.append(jour)
         jour += timedelta(days=1)
     return decomptes, exclus
+
+
+# ---------------------------------------------------------------------------
+#  Widget : sélecteur de date (calendrier déroulant, format DD-MM-AAAA)
+# ---------------------------------------------------------------------------
+class SelecteurDate(ttk.Frame):
+    """Champ de date en lecture seule accompagné d'un petit calendrier.
+
+    Aucune dépendance externe : le calendrier est un simple Toplevel Tkinter.
+    L'affichage se fait au format français DD-MM-AAAA.
+    """
+
+    def __init__(self, master, date_initiale=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self._date = date_initiale
+        self._popup = None
+        self._annee = (date_initiale or date.today()).year
+        self._mois = (date_initiale or date.today()).month
+
+        self.var = tk.StringVar()
+        self.entry = ttk.Entry(self, width=12, textvariable=self.var, state="readonly")
+        self.entry.pack(side="left")
+        self.bouton = ttk.Button(self, text="📅", width=3, command=self._basculer)
+        self.bouton.pack(side="left", padx=(2, 0))
+
+        if date_initiale is not None:
+            self.set_date(date_initiale)
+
+    # --- API publique ---
+    def get_date(self):
+        return self._date
+
+    def set_date(self, d):
+        self._date = d
+        self.var.set(d.strftime(FORMAT_FR) if d else "")
+
+    def effacer(self):
+        self._date = None
+        self.var.set("")
+
+    # --- Gestion du popup ---
+    def _basculer(self):
+        if self._popup is not None:
+            self._fermer()
+            return
+        base = self._date or date.today()
+        self._annee, self._mois = base.year, base.month
+
+        self._popup = tk.Toplevel(self)
+        self._popup.title("Choisir une date")
+        self._popup.resizable(False, False)
+        self._popup.transient(self.winfo_toplevel())
+        self._popup.geometry(f"+{self.winfo_rootx()}+{self.winfo_rooty() + self.winfo_height()}")
+        self._popup.protocol("WM_DELETE_WINDOW", self._fermer)
+
+        self._cadre = ttk.Frame(self._popup, padding=6)
+        self._cadre.pack()
+        self._dessiner()
+
+    def _fermer(self):
+        if self._popup is not None:
+            self._popup.destroy()
+            self._popup = None
+
+    def _naviguer(self, delta):
+        m = self._mois - 1 + delta
+        self._annee += m // 12
+        self._mois = m % 12 + 1
+        self._dessiner()
+
+    def _dessiner(self):
+        for w in self._cadre.winfo_children():
+            w.destroy()
+
+        # En-tête : navigation mois / année
+        entete = ttk.Frame(self._cadre)
+        entete.grid(row=0, column=0, columnspan=7, sticky="ew", pady=(0, 4))
+        entete.columnconfigure(1, weight=1)
+        ttk.Button(entete, text="◀", width=3, command=lambda: self._naviguer(-1)).grid(row=0, column=0)
+        ttk.Label(
+            entete, text=f"{MOIS_FR[self._mois - 1]} {self._annee}",
+            anchor="center", font=("Segoe UI", 10, "bold"),
+        ).grid(row=0, column=1, sticky="ew")
+        ttk.Button(entete, text="▶", width=3, command=lambda: self._naviguer(1)).grid(row=0, column=2)
+
+        # En-têtes des jours de la semaine
+        for i, j in enumerate(JOURS_FR):
+            ttk.Label(
+                self._cadre, text=j, anchor="center", font=("Segoe UI", 9, "bold")
+            ).grid(row=1, column=i, padx=1, pady=1)
+
+        # Grille des jours
+        cal = calendar.Calendar(firstweekday=0)  # 0 = lundi
+        aujourdhui = date.today()
+        for r, semaine in enumerate(cal.monthdatescalendar(self._annee, self._mois), start=2):
+            for c, jour in enumerate(semaine):
+                if jour.month != self._mois:
+                    ttk.Label(self._cadre, text="").grid(row=r, column=c)
+                    continue
+                btn = tk.Button(
+                    self._cadre, text=str(jour.day), width=3, relief="flat",
+                    command=lambda d=jour: self._choisir(d),
+                )
+                if jour == aujourdhui:
+                    btn.config(bg="#d6eaff")
+                if self._date and jour == self._date:
+                    btn.config(bg="#1e824c", fg="white")
+                btn.grid(row=r, column=c, padx=1, pady=1)
+
+    def _choisir(self, d):
+        self.set_date(d)
+        self._fermer()
 
 
 # ---------------------------------------------------------------------------
@@ -184,13 +304,13 @@ class AppConges(tk.Tk):
         saisie = ttk.Frame(frame)
         saisie.pack(fill="x")
 
-        ttk.Label(saisie, text="Du (AAAA-MM-JJ) :").grid(row=0, column=0, sticky="w", pady=6)
-        self.ent_debut = ttk.Entry(saisie, width=15)
-        self.ent_debut.grid(row=0, column=1, sticky="w", padx=6)
+        ttk.Label(saisie, text="Du (JJ-MM-AAAA) :").grid(row=0, column=0, sticky="w", pady=6)
+        self.sel_debut = SelecteurDate(saisie)
+        self.sel_debut.grid(row=0, column=1, sticky="w", padx=6)
 
-        ttk.Label(saisie, text="Au (AAAA-MM-JJ) :").grid(row=0, column=2, sticky="w", padx=(12, 0))
-        self.ent_fin = ttk.Entry(saisie, width=15)
-        self.ent_fin.grid(row=0, column=3, sticky="w", padx=6)
+        ttk.Label(saisie, text="Au (JJ-MM-AAAA) :").grid(row=0, column=2, sticky="w", padx=(12, 0))
+        self.sel_fin = SelecteurDate(saisie)
+        self.sel_fin.grid(row=0, column=3, sticky="w", padx=6)
 
         ttk.Checkbutton(
             saisie, text="Exclure les week-ends", variable=self.exclure_weekends
@@ -202,7 +322,8 @@ class AppConges(tk.Tk):
 
         ttk.Label(
             frame,
-            text="Astuce : pour poser un seul jour, mettez la même date dans les deux champs.",
+            text="Astuce : cliquez sur 📅 pour choisir une date. Pour poser un seul "
+            "jour, sélectionnez la même date dans les deux champs.",
             foreground="#555",
         ).pack(anchor="w", pady=(2, 8))
 
@@ -262,11 +383,12 @@ class AppConges(tk.Tk):
         )
 
     def _ajouter_periode(self):
-        try:
-            debut = date.fromisoformat(self.ent_debut.get().strip())
-            fin = date.fromisoformat(self.ent_fin.get().strip())
-        except ValueError:
-            messagebox.showerror("Erreur", "Dates invalides. Format attendu : AAAA-MM-JJ.")
+        debut = self.sel_debut.get_date()
+        fin = self.sel_fin.get_date()
+        if debut is None or fin is None:
+            messagebox.showerror(
+                "Erreur", "Veuillez sélectionner une date de début et une date de fin."
+            )
             return
 
         decomptes, exclus = jours_ouvres_periode(debut, fin, self.exclure_weekends.get())
@@ -292,13 +414,13 @@ class AppConges(tk.Tk):
                 "debut": debut.isoformat(),
                 "fin": fin.isoformat(),
                 "jours": nb_jours,
-                "exclus": [f"{d.isoformat()} ({motif})" for d, motif in exclus],
+                "exclus": [f"{d.strftime(FORMAT_FR)} ({motif})" for d, motif in exclus],
             }
         )
         self._sauvegarder()
         self._rafraichir()
-        self.ent_debut.delete(0, tk.END)
-        self.ent_fin.delete(0, tk.END)
+        self.sel_debut.effacer()
+        self.sel_fin.effacer()
 
     def _supprimer_periode(self):
         sel = self.tree.selection()
@@ -351,9 +473,11 @@ class AppConges(tk.Tk):
                 self.tree.delete(item)
             for p in self.periodes:
                 exclus_txt = ", ".join(p["exclus"]) if p["exclus"] else "—"
+                debut_fr = date.fromisoformat(p["debut"]).strftime(FORMAT_FR)
+                fin_fr = date.fromisoformat(p["fin"]).strftime(FORMAT_FR)
                 self.tree.insert(
                     "", "end",
-                    values=(p["debut"], p["fin"], p["jours"], exclus_txt),
+                    values=(debut_fr, fin_fr, p["jours"], exclus_txt),
                 )
 
         # Résumé
